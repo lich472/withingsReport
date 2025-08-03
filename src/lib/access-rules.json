@@ -1,0 +1,46 @@
+
+{
+  "jack.manners@flinders.edu.au": {
+    "role": "admin"
+  },
+  "jacksamuelmanners@gmail.com": {
+    "allowed_patterns": [
+      "jacksamuelmanners+**@gmail.com",
+      "js.manners@outlook.com"
+    ],
+    "allowed_studies": [
+      "test-study"
+    ]
+  },
+  "perea.hill@flinders.edu.au": {
+    "allowed_patterns": [
+      "sleephealthtreatment+**@gmail.com",
+      "specific.participant@email.com"
+    ],
+    "allowed_studies": [
+      "clinic-aish"
+    ]
+  },
+  "kate.poland@flinders.edu.au": {
+    "allowed_patterns": [
+      "sleephealthtreatment+**@gmail.com",
+      "specific.participant@email.com"
+    ],
+    "allowed_studies": [
+      "clinic-aish"
+    ]
+  },
+  "bastien.lechat@flinders.edu.au": {
+    "role": "admin"
+  },
+  "alison.leviton@flinders.edu.au": {
+    "allowed_patterns": [
+      "sleephealthtreatment+**@gmail.com",
+      "mimosa.study+**@gmail.com"
+    ],
+    "allowed_studies" : [
+      "mimosa",
+      "clinic-aish"
+    ]
+  }
+}
