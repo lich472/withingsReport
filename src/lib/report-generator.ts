@@ -660,17 +660,14 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                     <!-- Stats will be dynamically inserted here -->
                 </ul>
             </div>
-            
-            <div class="heading-with-button">
-                 <h2>Sleep Timing Overview</h2>
-                 <button id="fullscreen-timing-btn" class="icon-button" title="Expand view">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-                 </button>
-            </div>
-            <div id="sleep-timing-plot-container-v" class="responsive-plot"></div>
 
             <h2>Detailed Sleep Metrics</h2>
             <div id="detailed-metrics-container"></div>
+            <div id="duration-efficiency-regularity-container"></div>
+            <div id="sleep-ritual-container"></div>
+            <div id="AHI-container"></div>
+            <div id="osa-chart-container"></div>
+            <div id="snoring-chart-container"></div>
             
             ${nightly_modal_html}
             ${timing_modal_html}
@@ -781,8 +778,13 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             currentWids = hasEpochData ? sortedData.map(d => String(d.w_id || d.id)).filter(id => nightlyPlotData[id]) : [];
 
             renderSummaryStats(sortedData);
-            renderVerticalSleepTimingPlot(sortedData);
-            renderMetricsTable(sortedData);
+            // renderVerticalSleepTimingPlot(sortedData);
+            // renderMetricsTable(sortedData);
+            DurationEfficiencyRegularity(sortedData);
+            SleepRitual(sortedData);
+            SleepVitals(sortedData);
+            OSAChart();
+            SnoringChart();
             setupTimingModal();
         }
 
@@ -984,26 +986,33 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
         }
 
         function renderMetricsTable(data) {
+            // Get the container element where the table will be rendered
             const container = document.getElementById('detailed-metrics-container');
             container.innerHTML = '';
+            // Filter out invalid rows that don't have a valid date
             const validData = data.filter(d => d.enddate_utc && !isNaN(d.enddate_utc.getTime()));
             if (validData.length === 0) return;
             
+            // Create and append the summary table
             const table = document.createElement('table');
             table.className = 'summary-stats-table';
             container.appendChild(table);
 
+            // Add table headers
             table.innerHTML = \`
                 <thead><tr><th>Metric</th><th>Average (SD)</th><th>Min</th><th>Max</th></tr></thead>
                 <tbody></tbody>\`;
             const tbody = table.querySelector('tbody');
 
+            // Loop through all the metric fields defined in your config
             ALL_DATA_FIELDS.forEach(field => {
                 let values = validData.map(row => (row['w_' + field] !== undefined ? row['w_' + field] : row[field])).filter(v => typeof v === 'number' && !isNaN(v));
-                if (values.length === 0) return;
+                if (values.length === 0) return;  // Skip this metric if no valid values
 
+                // Get a clean display name for the field
                 const displayName = fieldDisplayNameMap[field] || field.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase());
                 
+                // Convert seconds to hours/minutes if field is a duration
                 if (DURATION_FIELDS_IN_SECONDS.includes(field)) {
                     if (displayName.includes('(hours)')) {
                         values = values.map(v => v / 3600);
@@ -1011,9 +1020,11 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                         values = values.map(v => v / 60);
                     }
                 } else if (EFFICIENCY_FIELDS.includes(field)) {
+                    // Convert efficiency from fraction to percentage
                     values = values.map(v => v * 100);
                 }
 
+                // Compute summary stats
                 const mean = arr => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
                 const std = (arr, avg) => arr.length > 0 ? Math.sqrt(arr.map(x => Math.pow(x - avg, 2)).reduce((a, b) => a + b) / arr.length) : 0;
 
@@ -1022,13 +1033,15 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                 const minVal = Math.min(...values);
                 const maxVal = Math.max(...values);
 
+                // Prepare data for line plot
                 let plotData = validData.map(row => {
                     const timezone = row.w_timezone || row.timezone;
                     const dateStr = formatInTimeZoneJS(row.enddate_utc, timezone, { year: 'numeric', month: '2-digit', day: '2-digit' });
                     if (dateStr === null) return null;
                     return { x: dateStr, y: (row['w_' + field] !== undefined ? row['w_' + field] : row[field]), id: (row.w_id || row.id) };
-                }).filter(Boolean);
+                }).filter(Boolean); // Remove null entries
                 
+                // Apply same unit conversions to plot data
                 if (DURATION_FIELDS_IN_SECONDS.includes(field)) {
                     if(displayName.includes('(hours)')) plotData = plotData.map(d => ({ ...d, y: d.y !== null ? d.y / 3600 : null }));
                     else plotData = plotData.map(d => ({ ...d, y: d.y !== null ? d.y / 60 : null }));
@@ -1036,12 +1049,15 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                     plotData = plotData.map(d => ({ ...d, y: d.y !== null ? d.y * 100 : null }));
                 }
                 
+                // Clean up plot data (remove invalid y-values)
                 const cleanedPlotData = plotData.filter(d => d.y !== null && d.y !== undefined && !isNaN(d.y));
 
+                // Create a new row for this metric
                 const dataRow = document.createElement('tr');
                 dataRow.className = 'data-row';
                 dataRow.innerHTML = \`<td>\${displayName}</td><td>\${avg.toFixed(2)} (\${stdev.toFixed(2)})</td><td>\${minVal.toFixed(2)}</td><td>\${maxVal.toFixed(2)}</td>\`;
                 
+                // If plot data exists, add expandable chart row
                 if (cleanedPlotData.length > 0) {
                     dataRow.classList.add('expandable');
                     const plotRow = document.createElement('tr');
@@ -1050,6 +1066,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                     tbody.appendChild(dataRow);
                     tbody.appendChild(plotRow);
 
+                    // Click-to-expand plot row
                     const clickHandler = function(event) {
                         const targetRow = this;
                         if (event.target.tagName === 'A') return;
@@ -1058,6 +1075,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                         const nextRow = targetRow.nextElementSibling;
                         const isNowOpen = nextRow.classList.toggle('open');
                         
+                        // Only initialize plot once
                         if (isNowOpen && !nextRow.dataset.plotInitialized) {
                             nextRow.dataset.plotInitialized = 'true';
                              setTimeout(() => {
@@ -1065,6 +1083,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                                 const x_coords = cleanedPlotData.map(d => d.x);
                                 const y_coords = cleanedPlotData.map(d => d.y);
 
+                                // Define plot trace
                                 const lineTrace = {
                                     x: x_coords,
                                     y: y_coords,
@@ -1075,6 +1094,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                                     hovertemplate: hasEpochData ? '%{x}<br>%{y:.2f}<br>Click for details<extra></extra>' : '%{x}<br>%{y:.2f}<extra></extra>'
                                 };
                                 
+                                // Define plot layout
                                 const x_range = [
                                     formatInTimeZoneJS(new Date(cleanedPlotData[0].x), 'UTC', { year: 'numeric', month: '2-digit', day: '2-digit' }),
                                     formatInTimeZoneJS(new Date(cleanedPlotData[cleanedPlotData.length-1].x), 'UTC', { year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -1093,6 +1113,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                                 const plotDiv = document.getElementById(plotElementId);
                                 Plotly.newPlot(plotElementId, fig.data, fig.layout, {responsive: true});
 
+                                // Optional: click point to show detailed view
                                 if (hasEpochData) {
                                     plotDiv.on('plotly_click', function(data) {
                                         if (data.points.length > 0) {
@@ -1101,20 +1122,526 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                                         }
                                     });
                                 }
-                                Plotly.Plots.resize(plotElementId);
+                                Plotly.Plots.resize(plotElementId); // Resize for responsiveness
                             }, 50);
                         } else if (isNowOpen) {
+                            // If already initialized, just resize on open
                             setTimeout(() => {
                                 const plotElement = document.getElementById(\`plot-\${field}\`);
                                 if (plotElement) Plotly.Plots.resize(plotElement);
                             }, 50);
                         }
                     };
+
+                    // Attach click handler to data row
                     dataRow.addEventListener('click', clickHandler);
                 } else {
+
+                    // If no plot data, just append the row
                     tbody.appendChild(dataRow);
                 }
             });
+        }
+
+        //Helper funtions
+        function formatHoursAndMinutes(decimalHours){
+            const hours = Math.floor(decimalHours);
+            const minutes = Math.round((decimalHours - hours) * 60);
+            return hours + 'h ' + minutes + 'm ';
+        }
+        
+        function timeStrToMinutes(str) {
+            if (typeof str !== 'string') return null;
+            const [hours, minutes] = str.split(':').map(Number);
+            if (isNaN(hours) || isNaN(minutes)) return null;
+            return hours * 60 + minutes;
+        }
+
+        function minutesToTimeStr(minutes) {
+            if (typeof minutes !== 'number' || isNaN(minutes)) return '–';
+            const h = Math.floor(minutes / 60) % 24;
+            const m = Math.round(minutes % 60);
+            return \`\${String(h).padStart(2, '0')}:\${String(m).padStart(2, '0')}\`;
+        }
+
+
+        function DurationEfficiencyRegularity(data) {
+            const container = document.getElementById('duration-efficiency-regularity-container');
+            container.innerHTML = '';
+            const validData = data.filter(d => d.enddate_utc && !isNaN(d.enddate_utc.getTime()));
+            if (validData.length === 0) return;
+
+            // split data into weekdays and weekends
+
+            // Sleep Duration
+            const isWeekend = (dateStr) => {
+                const day = new Date(dateStr).getDay(); // Sunday=0, Saturday=6
+                return day === 0 || day === 6;
+            };
+
+            const getDurationInHours = (row) => {
+                const rawValue = row.total_sleep_time_hours;
+                return typeof rawValue === 'number' ? rawValue : null;
+            };
+
+            //Sleep Latency
+            const getSleepLatency = (row) => {
+                const rawValue = row.sleep_latency;
+                return typeof rawValue === 'number' ? rawValue / 60 : null; // convert seconds to minutes
+            };
+
+            //Sleep Efficiency
+            const getTimeInBed = (row) => {
+                const rawValue = row.total_timeinbed;
+                return typeof rawValue === 'number' ? rawValue / 3600 : null; // convert seconds to hours
+            };
+            
+            const getTotalSleepTime = (row) => {
+                const rawValue = row.total_sleep_time;
+                return typeof rawValue === 'number' ? rawValue / 3600 : null; // convert seconds to hours
+            };
+
+            const getSleepEfficiencyPercent = (row) => {
+                const rawValue = row.sleep_efficiency;
+                return typeof rawValue === 'number' ? rawValue * 100 : null; // convert to percent (%)
+            };
+
+            // Sleep Duration
+            const weekdaysDurations = validData
+                .filter(d => !isWeekend(d.enddate_utc))
+                .map(getDurationInHours)
+                .filter(v => typeof v === 'number' && !isNaN(v));
+
+            const weekendsDurations = validData
+                .filter(d => isWeekend(d.enddate_utc))
+                .map(getDurationInHours)
+                .filter(v => typeof v === 'number' && !isNaN(v));
+
+            // Sleep Latency
+            const sleepLatencies = validData
+                .map(getSleepLatency)
+                .filter(v => v !== null && !isNaN(v));
+
+            // Sleep Efficiency
+            const timeInBed = validData
+                .map(getTimeInBed)
+                .filter(v => v !== null && !isNaN(v));
+
+            const totalSleepTime = validData
+                .map(getTotalSleepTime)
+                .filter(v => v !== null && !isNaN(v));
+
+            const sleepEfficiency = validData
+                .map(getSleepEfficiencyPercent)
+                .filter(v => v !== null && !isNaN(v));
+
+            const mean = (arr) => arr.length > 0 ? arr.reduce((a,b)=>a+b,0)/arr.length : 0;
+
+            const weekdayAvg = mean(weekdaysDurations)
+            const weekendAvg = mean(weekendsDurations)
+
+            const sleepLatencyAvg = Math.round(mean(sleepLatencies));
+
+            const timeInBedAvg = mean(timeInBed);
+            const totalSleepTimeAvg = mean(totalSleepTime);
+            const sleepEfficiencyAvg = mean(sleepEfficiency);
+
+            // Create summary table
+            const table = document.createElement('table');
+            table.className = 'summary-stats-table';
+            container.appendChild(table);
+
+            table.innerHTML = \`
+                <caption style="font-weight: bold; font-size: 1.2em; text-align: left; padding: 8px 0;">
+                    Duration, Efficiency & Regularity
+                </caption>
+
+                <table>
+                    <thead><tr><th>Type</th><th>Weekdays</th><th>Weekends</th></tr></thead>
+                    <tbody>
+                        <tr><td>Sleep Duration Average</td><td><strong>\${formatHoursAndMinutes(weekdayAvg)}</strong></td><td><strong>\${formatHoursAndMinutes(weekendAvg)}</strong></td></tr>             
+                    </tbody>
+                </table>
+
+                <table>
+                    <thead><tr><th></th><th>Average (min)</th></tr></thead>
+                    <tbody>
+                        <tr><td>Sleep Latency</td><td><strong>\${sleepLatencyAvg} min</strong></td></tr>             
+                    </tbody>
+                </table>
+
+                <table>
+                    <thead><tr><th></th><th>Time In Bed (TIB)</th><th>Total Sleep Time (TST)</th><th>Efficiency</th></tr></thead>
+                    <tbody>
+                        <tr><td>Sleep Efficiency</td><td><strong>\${formatHoursAndMinutes(timeInBedAvg)}</strong></td><td><strong>\${formatHoursAndMinutes(totalSleepTimeAvg)}</strong></td><td><strong>\${sleepEfficiencyAvg.toFixed(2)} %</strong></td></tr>             
+                    </tbody>
+                </table>
+                \`;
+            const tbody = table.querySelector('tbody');
+        }
+
+        function SleepRitual(data) {
+            const container = document.getElementById('sleep-ritual-container');
+            container.innerHTML = '';
+            const validData = data.filter(d => d.enddate_utc && !isNaN(d.enddate_utc.getTime()));
+            if (validData.length === 0) return;
+
+            // split data into weekdays and weekends
+
+            const isWeekend = (dateStr) => {
+                const day = new Date(dateStr).getDay(); // Sunday=0, Saturday=6
+                return day === 0 || day === 6;
+            };
+
+            const getBedtime = (row) => {
+                const timezone = row.w_timezone || row.timezone;
+                const start_time = formatInTimeZoneJS(row.startdate_utc, timezone, { hour: '2-digit', minute: '2-digit' });
+                const start_time_min = timeStrToMinutes(start_time);
+                return typeof start_time_min === 'number' ? start_time_min : null;
+            };
+
+            const getWakeUpTime = (row) => {
+                const timezone = row.w_timezone || row.timezone;
+                const end_time = formatInTimeZoneJS(row.enddate_utc, timezone, { hour: '2-digit', minute: '2-digit' });
+                const end_time_min = timeStrToMinutes(end_time);
+                return typeof end_time_min === 'number' ? end_time_min : null;
+            };
+
+            const getDurationToSleep = (row) => {
+                const durationValue = row.durationtosleep;
+                return typeof durationValue === 'number' ? durationValue / 60 : null; // convert seconds to minutes
+            };
+
+            const getDurationToWakeUp = (row) => {
+                const durationValue = row.durationtowakeup;
+                return typeof durationValue === 'number' ? durationValue / 60 : null; // convert seconds to minutes
+            };
+
+            const getTimeToFallAsleep = (row) => {
+                const timezone = row.w_timezone || row.timezone;
+                const start_time = formatInTimeZoneJS(row.startdate_utc, timezone, { hour: '2-digit', minute: '2-digit' });
+                const start_time_min = timeStrToMinutes(start_time);
+                const durationValue = row.durationtosleep / 60;
+                return typeof start_time_min === 'number' ? start_time_min + durationValue : null;
+            };
+
+            const getTimeToGetUp = (row) => {
+                const timezone = row.w_timezone || row.timezone;
+                const end_time = formatInTimeZoneJS(row.enddate_utc, timezone, { hour: '2-digit', minute: '2-digit' });
+                const end_time_min = timeStrToMinutes(end_time);
+                const durationValue = row.durationtowakeup / 60;
+                return typeof end_time_min === 'number' ? end_time_min + durationValue : null;
+            };
+
+            // Bedtime
+            const weekdaysBedtime = validData
+                .filter(d => !isWeekend(d.enddate_utc))
+                .map(getBedtime)
+                .filter(v => typeof v === 'number' && !isNaN(v));
+
+            const weekdaysTimeToFallAsleep = validData
+                .filter(d => !isWeekend(d.enddate_utc))
+                .map(getTimeToFallAsleep)
+                .filter(v => typeof v === 'number' && !isNaN(v));
+
+            const weekendsBedtime = validData
+                .filter(d => isWeekend(d.enddate_utc))
+                .map(getBedtime)
+                .filter(v => typeof v === 'number' && !isNaN(v));
+
+            const weekendsTimeToFallAsleep = validData
+                .filter(d => isWeekend(d.enddate_utc))
+                .map(getTimeToFallAsleep)
+                .filter(v => typeof v === 'number' && !isNaN(v));
+
+            // Wake Up
+            const weekdaysWakeUp = validData
+                .filter(d => !isWeekend(d.enddate_utc))
+                .map(getWakeUpTime)
+                .filter(v => typeof v === 'number' && !isNaN(v));
+
+            const weekdaysTimeToGetUp = validData
+                .filter(d => !isWeekend(d.enddate_utc))
+                .map(getTimeToGetUp)
+                .filter(v => typeof v === 'number' && !isNaN(v));
+
+            const weekendsWakeUp = validData
+                .filter(d => isWeekend(d.enddate_utc))
+                .map(getWakeUpTime)
+                .filter(v => typeof v === 'number' && !isNaN(v));
+
+            const weekendsTimeToGetUp = validData
+                .filter(d => isWeekend(d.enddate_utc))
+                .map(getTimeToGetUp)
+                .filter(v => typeof v === 'number' && !isNaN(v));
+            
+            const mean = (arr) => arr.length > 0 ? arr.reduce((a,b)=>a+b,0)/arr.length : 0;
+            // mean() of weekdays
+            const BedTimeWdAvg = mean(weekdaysBedtime)
+            const timeToFallAsleepWdAvg = mean(weekdaysTimeToFallAsleep)
+            const wakeUpTimeWdAvg = mean(weekdaysWakeUp)
+            const getUpTimeWdAvg = mean(weekdaysTimeToGetUp)
+            // mean of weekends
+            const bedTimeWkAvg = mean(weekendsBedtime)
+            const timeToFallAsleepWkAvg = mean(weekendsTimeToFallAsleep)
+            const wakeUpTimeWkAvg = mean(weekendsWakeUp)
+            const getUpTimeWkAvg = mean(weekendsTimeToGetUp)
+        
+            // Create summary table
+            const table = document.createElement('table');
+            table.className = 'summary-stats-table';
+            container.appendChild(table);
+
+            table.innerHTML = \`
+                <caption style="font-weight: bold; font-size: 1.2em; text-align: left; padding: 8px 0;">
+                    Sleep Ritual
+                </caption>
+                <table>
+                    <thead>
+                        <tr><th></th><th>Average Bedtime</th><th>Average Time to Fall Asleep</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Bedtime (Weekdays)</td><td><strong>\${minutesToTimeStr(BedTimeWdAvg)}PM</strong></td><td><strong>\${minutesToTimeStr(timeToFallAsleepWdAvg)}PM</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Bedtime (Weekends)</td><td><strong>\${minutesToTimeStr(bedTimeWkAvg)}PM</strong></td><td><strong>\${minutesToTimeStr(timeToFallAsleepWkAvg)}PM</strong></td>
+                        </tr>     
+                    </tbody>
+                </table>
+
+                <table>
+                    <thead>
+                        <tr><th></th><th>Average Wake-Up Time</th><th>Average Get-Up Time</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Wake-Up Time (Weekdays)</td><td><strong>\${minutesToTimeStr(wakeUpTimeWdAvg)}AM</strong></td><td><strong>\${minutesToTimeStr(getUpTimeWdAvg)}AM</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Wake-Up Time (Weekends)</td><td><strong>\${minutesToTimeStr(wakeUpTimeWkAvg)}AM</strong></td><td><strong>\${minutesToTimeStr(getUpTimeWkAvg)}AM</strong></td>
+                        </tr>            
+                    </tbody>
+                </table>
+            \`;
+            const tbody = table.querySelector('tbody');
+        }
+
+        function getOSASeverityAndColor(ahi) {
+            if (ahi <= 5) return { label: "None/Minimal", color: "green" };
+            if (ahi <= 15) return { label: "Mild", color: "yellow" };
+            if (ahi <= 30) return { label: "Moderate", color: "orange" };
+            return { label: "Severe", color: "red" };
+        }
+
+        function getSnoringSeverityAndColor(snoring) {
+            if (snoring === 0) return { label: "No Snoring", color: "green" };
+            if (snoring <= 15) return { label: "Mild", color: "yellow" };
+            if (snoring <= 30) return { label: "Moderate", color: "goldenrod" };
+            if (snoring <= 60) return { label: "Heavy", color: "orange" };
+            return { label: "Severe", color: "red" };
+        }
+
+        function SleepVitals(data) {
+            const container = document.getElementById('AHI-container');
+            container.innerHTML = '';
+            const validData = data.filter(d => d.enddate_utc && !isNaN(d.enddate_utc.getTime()));
+            if (validData.length === 0) return;
+
+            const getAHI = (row) => {
+                const rawValue = row.apnea_hypopnea_index;
+                return typeof rawValue === 'number' ? rawValue : null;
+            };
+
+            const getPercentSnoringNight = (row) => {
+                const snoring_minute = row.snoring_minutes;
+                const total_sleep_time_minute = row.total_sleep_time/60; // convert second to minutes
+                const snoring_night_percent = ((snoring_minute)/(total_sleep_time_minute)) * 100;
+                return typeof snoring_night_percent === 'number' ? snoring_night_percent : null;
+            };
+
+            const getSnoring = (row) => {
+                const snoring_minutes = row.snoring_minutes;
+                return typeof snoring_minutes === 'number' ? snoring_minutes : null;
+            };
+
+            const getHR = (row) => {
+                const heart_rate = row.hr_average;
+                return typeof heart_rate === 'number' ? heart_rate : null;
+            }
+
+            const getHRMin = (row) => {
+                const heart_rate_min = row.hr_min;
+                return typeof heart_rate_min === 'number' ? heart_rate_min : null;
+            }
+
+            const getHRMax = (row) => {
+                const heart_rate_max = row.hr_max;
+                return typeof heart_rate_max === 'number' ? heart_rate_max : null;
+            }
+
+            const AHI = validData
+                .map(getAHI)
+                .filter(v => v !== null && !isNaN(v));
+
+            const PercentSnoringNight = validData
+                .map(getPercentSnoringNight)
+                .filter(v => v !== null && !isNaN(v));
+
+            const Snoring = validData
+                .map(getSnoring)
+                .filter(v => v !== null && !isNaN(v));
+
+            const HeartRate = validData
+                .map(getHR)
+                .filter(v => v !== null && !isNaN(v));
+
+            const HeartRateMin = validData
+                .map(getHRMin)
+                .filter(v => v !== null && !isNaN(v));
+
+            const HeartRateMax = validData
+                .map(getHRMax)
+                .filter(v => v !== null && !isNaN(v));
+
+            const mean = (arr) => arr.length > 0 ? arr.reduce((a,b)=>a+b,0)/arr.length : 0;
+            const AHIAvg = mean(AHI);
+            const AHIMin = Math.min(...AHI);
+            const AHIMax = Math.max(...AHI);
+
+            const SnoringPercentAvg = Math.round(mean(PercentSnoringNight));
+            const SnoringAvg = Math.round(mean(Snoring));
+
+            const HeartRateAvg = Math.round(mean(HeartRate));
+            const HRMin = Math.min(...HeartRateMin);
+            const HRMax = Math.max(...HeartRateMax);
+
+            // make color and label object for each value
+            const severityMin = getOSASeverityAndColor(AHIMin);
+            const severityAvg = getOSASeverityAndColor(AHIAvg);
+            const severityMax = getOSASeverityAndColor(AHIMax);
+
+            const severitySnoring = getSnoringSeverityAndColor(SnoringAvg)
+
+            // Create summary table
+            const table = document.createElement('table');
+            table.className = 'summary-stats-table';
+            container.appendChild(table);
+
+            table.innerHTML = \`
+                <caption style="font-weight: bold; font-size: 1.2em; text-align: left; padding: 8px 0;">
+                    Sleep Vitals
+                </caption>
+                <table>
+                    <thead><tr><th></th><th>Min</th><th>Average</th><th>Max</th></tr></thead>
+                    <tbody>
+                        <tr><td>AHI</td><td><strong>\${AHIMin.toFixed(1)} Event/Hour</strong></td><td><strong>\${AHIAvg.toFixed(1)} Events/Hour</strong></td><td><strong>\${AHIMax.toFixed(1)} Events/Hour</strong></td></tr>
+                        <tr>
+                            <td>OSA Severity</td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color: \${severityMin.color}; border-radius: 50%; margin-right: 8px;"></span><strong>\${severityMin.label}</strong></td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color: \${severityAvg.color}; border-radius: 50%; margin-right: 10px;"></span><strong>\${severityAvg.label}</strong></td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color: \${severityMax.color}; border-radius: 50%; margin-right: 10px;"></span><strong>\${severityMax.label}</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <table>
+                    <thead><tr><th></th><th>Average Night</th><th>Average</th><th>Severity</th></tr></thead>
+                    <tbody>
+                        <tr>
+                            <td>Snoring</td><td><strong>\${SnoringPercentAvg} %</strong></td>
+                            <td><strong>\${SnoringAvg} min</strong></td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color: \${severitySnoring.color}; border-radius: 50%; margin-right: 10px;"></span><strong>\${severitySnoring.label}</strong></td>
+                            <td></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <table>
+                    <thead><tr><th></th><th>Average</th><th>Range</th></tr></thead>
+                    <tbody>
+                        <tr>
+                            <td>Overnight Heart Rate</td>
+                            <td><strong>\${HeartRateAvg} bpm</strong></td>
+                            <td><strong>\${HRMin}-\${HRMax} bpm</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+                \`;
+            const tbody = table.querySelector('tbody');
+        }
+
+        function OSAChart() {
+            const container = document.getElementById('osa-chart-container');
+            container.innerHTML = '';
+            
+            // Create summary table
+            const table = document.createElement('table');
+            table.className = 'summary-stats-table';
+            container.appendChild(table);
+
+            table.innerHTML = \`
+                <caption style="font-weight: bold; font-size: 1.2em; text-align: left; padding: 8px 0;">
+                    Reference Charts
+                </caption>
+                <table>
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>AHI < 5 (Event/Hour)</th>
+                            <th>5 ≤ AHI < 15 (Event/Hour)</th>
+                            <th>15 ≤ AHI < 30 (Event/Hour)</th>
+                            <th>AHI ≥ 30 (Event/Hour)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>OSA Rating</td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color:green; border-radius: 50%; margin-right: 8px;"></span><strong>None/Minimal Sleep</strong></td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color:yellow; border-radius: 50%; margin-right: 8px;"></span><strong>Mild Sleep</strong></td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color:orange; border-radius: 50%; margin-right: 8px;"></span><strong>Moderate Sleep</strong></td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color:red; border-radius: 50%; margin-right: 8px;"></span><strong>Severe Sleep</strong></td>
+                        </tr>             
+                    </tbody>
+                </table>
+                \`;
+            const tbody = table.querySelector('tbody');
+        }
+
+        function SnoringChart() {
+            const container = document.getElementById('snoring-chart-container');
+            container.innerHTML = '';
+            
+            // Create summary table
+            const table = document.createElement('table');
+            table.className = 'summary-stats-table';
+            container.appendChild(table);
+
+            table.innerHTML = \`
+                <table>
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>Snoring = 0 (minutes)</th>
+                            <th>1 ≤ AHI < 15 (minutes)</th>
+                            <th>15 ≤ AHI < 30 (minutes)</th>
+                            <th>30 ≤ AHI < 60 (minutes)</th>
+                            <th>AHI ≥ 60 (minutes)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Snoring Average Rating</td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color:green; border-radius: 50%; margin-right: 8px;"></span><strong>No Snoring</strong></td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color:yellow; border-radius: 50%; margin-right: 8px;"></span><strong>Mild</strong></td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color:orange; border-radius: 50%; margin-right: 8px;"></span><strong>Moderate</strong></td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color:goldenrod; border-radius: 50%; margin-right: 8px;"></span><strong>Heavy</strong></td>
+                            <td><span style="display: inline-block; width: 15px; height: 15px; background-color:red; border-radius: 50%; margin-right: 8px;"></span><strong>Severe</strong></td>
+                        </tr>             
+                    </tbody>
+                </table>
+                \`;
+            const tbody = table.querySelector('tbody');
         }
         
         let currentWid = null;
