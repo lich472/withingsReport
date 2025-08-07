@@ -10,29 +10,12 @@ git commit -m "Initial commit with studio-master files"
 git branch -M main
 git push -u origin main
 
-"SLEEP TIMING OVERVIEW"
-
-            <h3>Duration, Efficiency & Regularity</h3>
-            <div>
-                <h4>Sleep Duration Trends</h4>
-                <div>
-                    <span>Sleep Duration Average</span>
-                    <span>Sleep Latency</span>
-                    <span>Sleep Efficiency</span>
-                </div>
-
-                <h4>Sleep Ritual</h4>
-                <div>
-                    <span>Bedtime (Weekdays)</span>
-                    <span>Bedtime (Weekends)</span>
-                    <span>Week-Up Time (Weekdays)</span>
-                    <span>Week-Up (Weekends)</span>
-                </div>
-
-                <h4>Sleep Vitals</h4>
-                <div>
-                    <span>AHI</span>
-                    <span>Snoring</span>
-                    <span>Overnight Heart Rate</span>
-                </div>
-            </div>
+*** How to run ***
+Step1: Download the fully zip folder from gitHub repo and upzip it
+Step2: Open the folder via "VS Code" software
+Step2: Press "Ctrl+j" to open Terminal
+Step3: Type "cd .\{your file name}"
+Step4: Type "npm i" to install all necessary library
+Step5: Type "npm run dev" to run program
+Step6: Open the browser and type this endpoint http://localhost:9002 in the search bar
+Step7: Hopefully, it can run smoothly :)
