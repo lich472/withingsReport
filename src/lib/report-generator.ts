@@ -540,7 +540,8 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
     `;
     
     const footer_links = [
-        `<a id="summary-data-link" href="${summary_csv_datauri}" download="summary_df.csv">📄 Download Summary CSV</a>`
+        `<a id="summary-data-link" href="${summary_csv_datauri}" download="summary_df.csv">📄 Download Summary CSV</a>`,
+        `<a id="epoch-data-link" href="${epoch_csv_datauri}" download="epoch_df.csv">📄 Download Epoch CSV</a>` // epoch __
     ];
     if (hasEpochData) {
         footer_links.push(`<a href="${epoch_csv_datauri}" download="epoch_df.csv">📄 Download Epoch CSV</a>`);
@@ -662,12 +663,15 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             </div>
 
             <h2>Detailed Sleep Metrics</h2>
+            <div id="sleep-timing-plot-container-h" class="responsive-plot></div>
             <div id="detailed-metrics-container"></div>
             <div id="duration-efficiency-regularity-container"></div>
             <div id="sleep-ritual-container"></div>
             <div id="AHI-container"></div>
             <div id="osa-chart-container"></div>
             <div id="snoring-chart-container"></div>
+            <div id="wake-episodes-container"></div> 
+
             
             ${nightly_modal_html}
             ${timing_modal_html}
@@ -694,6 +698,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
         };
 
         let fullSummaryData = [];
+        let epochData = []; // epoch__
         let sleepTimingPlotData = [];
         let currentWids = [];
 
@@ -731,6 +736,39 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                 }
             });
 
+            // epoch__
+            // ---- EPOCH ----
+            const epochLink = document.getElementById('epoch-data-link');
+            if (epochLink) {
+                Papa.parse(epochLink.href, {
+                    download: true,
+                    header: true,
+                    dynamicTyping: true,
+                    skipEmptyLines: true,
+                    complete: (results) => {
+                        epochData = results.data.map(row => ({
+                            id: row.id,
+                            state: row.state,
+                            timestamp: row.timestamp,
+                            date: new Date(row.timestamp * 1000)
+                        })).filter(r => r.id && r.timestamp);
+
+                        const wakeEpisodes = findWakeEpisodes(epochData);
+
+                        // Degbug: render into DOM IF WE HAVE Epoch data
+                        // renderWakeEpisodes(wakeEpisodes);
+
+                        // Call the plot function if summary is already loaded
+                        if (fullSummaryData.length) {
+                            renderHorizontalSleepTimingPlot(fullSummaryData, wakeEpisodes);
+                        }
+                    },
+                    error: (err) => {
+                        console.error("Error parsing epoch CSV:", err);
+                    }
+                });
+            } 
+
             const settingsBtn = document.getElementById('floating-settings-btn');
             const settingsMenu = document.getElementById('settings-menu');
             if (settingsBtn && settingsMenu) {
@@ -752,6 +790,24 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             }
         });
 
+        /* Debug: If we have Epoch data, you can uncommend this code to evaluate "Time of out bed" Episodes 
+        function renderWakeEpisodes(episodes) {
+            const container = document.getElementById("wake-episodes-container");
+            if (!container) return;
+
+            if (episodes.length === 0) {
+                container.innerHTML = "<p>No long wake episodes found.</p>";
+                return;
+            }
+
+            const html = episodes.map(e =>
+                \`<li>ID: \${e.id} | Start: \${e.start.toLocaleString()} | End: \${e.end.toLocaleString()} | Duration: \${(e.durationSec/60).toFixed(1)} min</li>\`
+            ).join("");
+
+            container.innerHTML = \`<h3>Wake Episodes ≥10min</h3><ul>\${html}</ul>\`;
+        } */
+
+
         function applyFilters() {
             const filterToggle = document.getElementById('nap-filter-toggle').checked;
             const durationHours = parseFloat(document.getElementById('nap-duration-hours').value);
@@ -764,7 +820,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             
             if (filteredData.length === 0) {
                 document.getElementById('summary-stats-list').innerHTML = '<li>No data matches the current filters.</li>';
-                document.getElementById('sleep-timing-plot-container-v').innerHTML = '';
+                document.getElementById('sleep-timing-plot-container-h').innerHTML = '';
                 document.getElementById('detailed-metrics-container').innerHTML = '';
                 return;
             }
@@ -772,14 +828,69 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             updateReport(filteredData);
         }
 
+        // epoch__
+        function findWakeEpisodes(data) {
+            // if we dont have Epoch_df.csv JUST ADD
+            if(data.length === 0) return;
+            // group by id
+            const grouped = {};
+            data.forEach(row => {
+                if (!grouped[row.id]) grouped[row.id] = [];
+                grouped[row.id].push(row);
+            });
+
+            const results = [];
+
+            Object.keys(grouped).forEach(id => {
+                const rows = grouped[id].sort((a, b) => a.timestamp - b.timestamp);
+
+                let start = null;
+                for (let i = 0; i < rows.length; i++) {
+                    const r = rows[i];
+                    if (r.state === 0) {
+                        if (!start) start = r; // beginning of wake period
+                    } else {
+                        if (start) {
+                            const duration = rows[i - 1].timestamp - start.timestamp;
+                            if (duration >= 600) { // ≥10 min
+                                results.push({
+                                    id,
+                                    start: start.date,
+                                    end: new Date(rows[i - 1].timestamp * 1000),
+                                    durationSec: duration
+                                });
+                            }
+                            start = null;
+                        }
+                    }
+                }
+
+                // check if wake extends to the end of the file
+                if (start) {
+                    const last = rows[rows.length - 1];
+                    const duration = last.timestamp - start.timestamp;
+                    if (duration >= 600) {
+                        results.push({
+                            id,
+                            start: start.date,
+                            end: last.date,
+                            durationSec: duration
+                        });
+                    }
+                }
+            });
+
+            return results;
+        }
+
+
         function updateReport(data) {
             const sortedData = [...data].sort((a, b) => a.startdate_utc.getTime() - b.startdate_utc.getTime());
             
             currentWids = hasEpochData ? sortedData.map(d => String(d.w_id || d.id)).filter(id => nightlyPlotData[id]) : [];
 
             renderSummaryStats(sortedData);
-            // renderVerticalSleepTimingPlot(sortedData);
-            // renderMetricsTable(sortedData);
+            renderHorizontalTimingPlot();
             DurationEfficiencyRegularity(sortedData);
             SleepRitual(sortedData);
             SleepVitals(sortedData);
@@ -855,72 +966,316 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             } catch (e) { return null; }
         }
 
-        function renderVerticalSleepTimingPlot(data) {
-            const container = document.getElementById('sleep-timing-plot-container-v');
-            container.innerHTML = '';
-            if (data.length === 0) return;
-            const validData = data.filter(d => d.enddate_utc && !isNaN(d.enddate_utc.getTime())).sort((a,b) => a.enddate_utc - b.enddate_utc);
-            if (validData.length === 0) return;
+    function renderHorizontalSleepTimingPlot(summaryData, wakeEpisodes) {
+        const container = document.getElementById('sleep-timing-plot-container-h');
+        container.innerHTML = '';
+        if (!summaryData.length) return;
 
-            const plotData = validData.map(row => {
-                const timezone = row.w_timezone || row.timezone;
-                const sleep_date = formatInTimeZoneJS(row.enddate_utc, timezone, { month: 'short', day: 'numeric', year: 'numeric' });
-                const start_time = formatInTimeZoneJS(row.startdate_utc, timezone, { hour: '2-digit', minute: '2-digit' });
-                const end_time = formatInTimeZoneJS(row.enddate_utc, timezone, { hour: '2-digit', minute: '2-digit' });
-                
-                let start_min_from_noon = mins_from_noon_js(row.startdate_utc, timezone);
-                let end_min_from_noon = mins_from_noon_js(row.enddate_utc, timezone);
+        const validSummary = summaryData
+            .filter(d => d.enddate_utc && !isNaN(d.enddate_utc.getTime()))
+            .sort((a, b) => a.enddate_utc - b.enddate_utc);
 
-                if (start_min_from_noon === null || end_min_from_noon === null || sleep_date === null) return null;
-                if (end_min_from_noon < start_min_from_noon) end_min_from_noon += 1440;
+        if (!validSummary.length) return;
 
-                const duration = end_min_from_noon - start_min_from_noon;
-                const hovertemplate = hasEpochData ? \`\${sleep_date}<br>Start: \${start_time}<br>End: \${end_time}<br>Click for details<extra></extra>\` : \`\${sleep_date}<br>Start: \${start_time}<br>End: \${end_time}<extra></extra>\`;
-                
-                return {
-                    x: sleep_date,
-                    base: start_min_from_noon,
-                    y: duration,
-                    id: (row.w_id || row.id),
-                    hovertemplate: hovertemplate
-                };
-            }).filter(Boolean);
+        // Build maps from summary rows
+        const idToTz = new Map(validSummary.map(r => [
+            String(r.w_id || r.id), r.w_timezone || r.timezone || 'UTC'
+        ]));
 
-            sleepTimingPlotData = plotData; // Store for modal
-            if (plotData.length === 0) return;
-            
-            const tickVals = Array.from({length: 49}, (_, i) => i * 60); 
-            const tickText = tickVals.map(v => \`\${String(Math.floor((v + 720) / 60) % 24).padStart(2, '0')}:00\`);
-            const midnight_val = (((0 * 60 + 0) - 720) + 1440) % 1440;
+        const plotData = validSummary.map(row => {
+            const tz = idToTz.get(String(row.w_id || row.id)) || 'UTC';
+            const yLabel = formatInTimeZoneJS(row.enddate_utc, tz, { day: '2-digit', month: 'short' });
+            const startMin = mins_from_noon_js(row.startdate_utc, tz);
+            const endMinRaw = mins_from_noon_js(row.enddate_utc, tz);
+            if (startMin == null || endMinRaw == null || yLabel == null) return null;
+            const endMin = endMinRaw < startMin ? endMinRaw + 1440 : endMinRaw;
 
-            const trace = {
-                x: plotData.map(d => d.x),
-                y: plotData.map(d => d.y),
-                base: plotData.map(d => d.base),
+            return {
+            id: String(row.w_id || row.id),
+            y: yLabel,
+            base: startMin,
+            duration: endMin - startMin,
+            start_min_from_noon: startMin,
+            out_of_bed_count: row.out_of_bed_count,
+            ahi_round: Math.round(row.apnea_hypopnea_index),
+            snoring_minutes: row.snoring_minutes,
+            hr_average: row.hr_average,
+            TIB_min: row.total_timeinbed / 3600,
+            asleep_min: row.total_sleep_time / 3600,
+            sleep_efficiency_percent: (row.sleep_efficiency || 0) * 100,
+            hovertemplate: hasEpochData
+                ? \`\${yLabel}<br>Start: \${formatInTimeZoneJS(row.startdate_utc, tz, {hour: '2-digit', minute:'2-digit'})}<br>End: \${formatInTimeZoneJS(row.enddate_utc, tz, {hour:'2-digit', minute:'2-digit'})}<br>Click for details<extra></extra>\`
+                : \`\${yLabel}<br>Start: \${formatInTimeZoneJS(row.startdate_utc, tz, {hour: '2-digit', minute:'2-digit'})}<br>End: \${formatInTimeZoneJS(row.enddate_utc, tz, {hour:'2-digit', minute:'2-digit'})}<extra></extra>\`
+            };
+        }).filter(Boolean);
+
+        if (!plotData.length) return;
+
+        // id -> y label for aligning wake episodes
+        const idToY = new Map(plotData.map(d => [d.id, d.y]));
+
+        // Convert wake episodes using the SAME tz as the night with that id
+        let epochPlotData = []; 
+        let wakeTrace = null;
+        if(wakeEpisodes){
+            epochPlotData = wakeEpisodes
+                .filter(w => w.durationSec >= 600)
+                .map(w => {
+                const id = String(w.id);
+                const tz = idToTz.get(id) || 'UTC';
+                const y = idToY.get(id) || formatInTimeZoneJS(w.end, tz, { day: '2-digit', month: 'short' });
+                const startMin = mins_from_noon_js(w.start, tz);
+                const endMin = mins_from_noon_js(w.end, tz);
+                if (startMin == null || endMin == null) return null;
+                const durationMin = endMin >= startMin ? (endMin - startMin) : (endMin + 1440 - startMin);
+                return { id, y, tz, start: w.start, end: w.end, startMin, durationMin };
+                })
+                .filter(Boolean);
+        }
+
+        // *** traces ***
+        const startTimeBarWidth = 15;
+
+        const traceDuration = {
+            y: plotData.map(d => d.y),
+            x: plotData.map(d => d.duration),
+            base: plotData.map(d => d.base),
+            type: 'bar',
+            orientation: 'h',
+            customdata: plotData.map(d => d.id),
+            hovertemplate: plotData.map(d => d.hovertemplate),
+            marker: { color: '#75baf5', line: { color: '#75baf5', width: 1 } },
+            showlegend: true,
+            name: 'Sleep Duration',
+            offsetgroup: 0
+        };
+
+        const traceStartTime = {
+            y: plotData.map(d => d.y),
+            x: new Array(plotData.length).fill(startTimeBarWidth),
+            base: plotData.map(d => d.start_min_from_noon),
+            type: 'bar',
+            orientation: 'h',
+            customdata: plotData.map(d => d.id),
+            hovertemplate: plotData.map(d => d.hovertemplate),
+            marker: { color: 'white', line: { color: '#75baf5', width: 1 } },
+            showlegend: true,
+            name: 'Start In Bed'
+        };
+
+        // IMPORTANT: build wake trace from epochPlotData (not plotData)
+        if(epochPlotData.length){
+            wakeTrace = {
+                y: epochPlotData.map(d => d.y),
+                x: epochPlotData.map(d => d.durationMin),
+                base: epochPlotData.map(d => d.startMin),
                 type: 'bar',
-                orientation: 'v',
-                customdata: plotData.map(d => d.id),
-                hovertemplate: plotData.map(d => d.hovertemplate),
-                marker: { color: '#75baf5' },
-                showlegend: false
+                orientation: 'h',
+                name: 'Extended Out of Bed',
+                marker: { color: 'red', line: { color: 'darkred', width: 1 } },
+                hovertemplate: epochPlotData.map(d => {
+                const s = formatInTimeZoneJS(d.start, d.tz, { hour: '2-digit', minute: '2-digit' });
+                const e = formatInTimeZoneJS(d.end,   d.tz, { hour: '2-digit', minute: '2-digit' });
+                return \`\${d.y}<br>Out of Bed Start: \${s}<br>End: \${e}<br>Duration: \${d.durationMin.toFixed(1)} min<extra></extra>\`;
+                })
             };
-            const layout = {
-                template: 'simple_white',
-                hovermode: 'x',
-                barmode: 'stack',
-                yaxis: { title: "Time of Day", tickmode: 'array', tickvals: tickVals, ticktext: tickText, showgrid: false },
-                xaxis: { type: 'category', autorange: true },
-                autosize: true, margin: { l: 40, r: 20, t: 40, b: 80 }, 
-                height: 500,
-                showlegend: false,
-                shapes: [{
-                    type: 'line', xref: 'paper', x0: 0, x1: 1,
-                    y0: midnight_val, y1: midnight_val,
-                    line: { color: 'black', width: 1 }, layer: 'below'
-                }]
-            };
-            
-            Plotly.newPlot(container, [trace], layout, {responsive: true});
+        }   
+
+        // axes & layout
+        const tickVals = Array.from({ length: 49 }, (_, i) => i * 60);
+        const tickText = tickVals.map(v => {
+            const h24 = (Math.floor((v + 720) / 60) % 24);
+            const h12 = h24 % 12 || 12;
+            const ampm = h24 < 12 ? 'AM' : 'PM';
+            return \`\${h12}\${ampm}\`;
+        });
+
+        const minX = Math.min(...plotData.map(d => d.base));
+        const maxX = Math.max(...plotData.map(d => d.base + d.duration));
+        const filteredTickVals = tickVals.filter(v => v >= minX - 30 && v <= maxX + 30);
+        const filteredTickText = tickText.filter((_, i) => tickVals[i] >= minX - 30 && tickVals[i] <= maxX + 30);
+
+        const layout = {
+            template: 'simple_white',
+            hovermode: 'closest',
+            barmode: 'overlay',
+            xaxis: { tickmode: 'array', side: 'top', tickvals: filteredTickVals, ticktext: filteredTickText, showgrid: true },
+            yaxis: { title: 'Date', type: 'category', autorange: 'reversed', automargin: true },
+            width: Math.max(150, plotData.length * 10 + 50),
+            autosize: true,
+            showlegend: true,
+            legend: { orientation: 'h', y: -0.2 }
+        };
+
+        wakeEpisodes ? Plotly.newPlot(container, [traceDuration, traceStartTime, wakeTrace], layout, { responsive: true }) : Plotly.newPlot(container, [traceDuration, traceStartTime], layout, { responsive: true });
+
+            // ANNOTATIONS METHOD
+
+            // Calculate x position for annotations — a bit right of the longest bar end
+            const maxBarEnd = Math.max(...plotData.map(d => d.base + d.duration));
+            const maxBarStart = Math.max(...plotData.map(d => d.base));
+            const annotationXPos1 = maxBarEnd + 20;  // Times Out Of Bed 
+            const annotationXPos2 = annotationXPos1 + 200;  // AHI
+            const annotationXPos3 = annotationXPos2 + 80; // Snoring
+            const annotationXPos4 = annotationXPos3 + 100; // Average Heart Rate
+            const annotationXPos5 = maxBarStart - 250; // Sleep efficiency
+            const annotationXPos6 = annotationXPos5 - 100; // TIB
+            const annotationXPos7 = annotationXPos6 - 100; // Asleep
+
+
+            // Create annotations array
+            const annotations = plotData.map(d => ([
+            {
+                x: annotationXPos1,
+                y: d.y,
+                text: d.out_of_bed_count.toString(),
+                showarrow: false,
+                font: { color: 'black', size: 13, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'middle'
+            },
+            {
+                x: annotationXPos2,
+                y: d.y,
+                text: \`<span style="color:\${getOSASeverityAndColor(d.ahi_round).color}">●</span> \${d.ahi_round}\`,
+                showarrow: false,
+                font: { color: 'black', size: 13, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'middle'
+            },
+
+            {
+                x: annotationXPos3,
+                y: d.y,
+                text: d.snoring_minutes.toString() + " Min",
+                showarrow: false,
+                font: { color: 'black', size: 13, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'middle'
+            },
+            {
+                x: annotationXPos4,
+                y: d.y,
+                text: d.hr_average.toString() + " bpm",
+                showarrow: false,
+                font: { color: 'black', size: 13, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'middle'
+            },
+            {
+                x: annotationXPos5,
+                y: d.y,
+                text: d.sleep_efficiency_percent.toString() + " %",
+                showarrow: false,
+                font: { color: 'black', size: 13, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'middle'
+            },
+            {
+                x: annotationXPos6,
+                y: d.y,
+                text: formatHoursAndMinutes(d.TIB_min).toString(),
+                showarrow: false,
+                font: { color: 'black', size: 13, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'middle'
+            },
+            {
+                x: annotationXPos7,
+                y: d.y,
+                text: formatHoursAndMinutes(d.asleep_min).toString(),
+                showarrow: false,
+                font: { color: 'black', size: 13, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'middle'
+            }
+            ])).flat();
+
+
+            // Add header annotation for the column
+            annotations.push(
+            {
+                x: annotationXPos1,
+                y: 1,       // top position
+                xref: 'x',
+                yref: 'paper',
+                text: '<b>Times Out Of Bed</b>',
+                showarrow: false,
+                font: { color: 'black', size: 14, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'bottom'
+            },
+            {
+                x: annotationXPos2,
+                y: 1,
+                xref: 'x',
+                yref: 'paper',
+                text: '<b>AHI</b>',
+                showarrow: false,
+                font: { color: 'black', size: 14, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'bottom'
+            },
+            {
+                x: annotationXPos3,
+                y: 1,
+                xref: 'x',
+                yref: 'paper',
+                text: '<b>Snoring</b>',
+                showarrow: false,
+                font: { color: 'black', size: 14, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'bottom'
+            },
+            {
+                x: annotationXPos4,
+                y: 1,
+                xref: 'x',
+                yref: 'paper',
+                text: '<b>Average Heart Rate</b>',
+                showarrow: false,
+                font: { color: 'black', size: 14, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'bottom'
+            },
+            {
+                x: annotationXPos5,
+                y: 1,
+                xref: 'x',
+                yref: 'paper',
+                text: '<b>Efficiency</b>',
+                showarrow: false,
+                font: { color: 'black', size: 14, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'bottom'
+            },
+            {
+                x: annotationXPos6,
+                y: 1,
+                xref: 'x',
+                yref: 'paper',
+                text: '<b>In Bed</b>',
+                showarrow: false,
+                font: { color: 'black', size: 14, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'bottom'
+            },
+            {
+                x: annotationXPos7,
+                y: 1,
+                xref: 'x',
+                yref: 'paper',
+                text: '<b>Asleep</b>',
+                showarrow: false,
+                font: { color: 'black', size: 14, family: 'Arial, sans-serif' },
+                xanchor: 'left',
+                yanchor: 'bottom'
+            }
+            );
+
+            // Add to layout
+            layout.annotations = (layout.annotations || []).concat(annotations);
+
 
             if (hasEpochData) {
                 container.on('plotly_click', (data) => {
@@ -932,6 +1287,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             }
         }
 
+
         function renderHorizontalTimingPlot() {
             const container = document.getElementById('timing-modal-content');
             container.innerHTML = '';
@@ -939,6 +1295,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             const plotData = sleepTimingPlotData;
             if (plotData.length === 0) return;
 
+            // 2 lines for x-Axis (sleep spans overnight (e.g., 10 PM to 6 AM).)
             const tickVals = Array.from({length: 49}, (_, i) => i * 60); 
             const tickText = tickVals.map(v => \`\${String(Math.floor((v + 720) / 60) % 24).padStart(2, '0')}:00\`);
             const midnight_val = (((0 * 60 + 0) - 720) + 1440) % 1440;
@@ -1147,7 +1504,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
         function formatHoursAndMinutes(decimalHours){
             const hours = Math.floor(decimalHours);
             const minutes = Math.round((decimalHours - hours) * 60);
-            return hours + 'h ' + minutes + 'm ';
+            return hours + 'h' + minutes;
         }
         
         function timeStrToMinutes(str) {
@@ -1164,20 +1521,18 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             return \`\${String(h).padStart(2, '0')}:\${String(m).padStart(2, '0')}\`;
         }
 
+        // function split dateStr into weekdays and weekends
+        function isWeekend(dateStr){
+            const day = new Date(dateStr).getDay(); // Sunday=0, Saturday=6
+            return day === 0 || day === 6;
+        };
+
 
         function DurationEfficiencyRegularity(data) {
             const container = document.getElementById('duration-efficiency-regularity-container');
             container.innerHTML = '';
             const validData = data.filter(d => d.enddate_utc && !isNaN(d.enddate_utc.getTime()));
             if (validData.length === 0) return;
-
-            // split data into weekdays and weekends
-
-            // Sleep Duration
-            const isWeekend = (dateStr) => {
-                const day = new Date(dateStr).getDay(); // Sunday=0, Saturday=6
-                return day === 0 || day === 6;
-            };
 
             const getDurationInHours = (row) => {
                 const rawValue = row.total_sleep_time_hours;
@@ -1751,7 +2106,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
         
         window.applyFilters = applyFilters;
         window.addEventListener("resize", () => {
-            const timingPlot = document.getElementById('sleep-timing-plot-container-v').querySelector('.js-plotly-plot');
+            const timingPlot = document.getElementById('sleep-timing-plot-container-h').querySelector('.js-plotly-plot');
             if (timingPlot) {
                  Plotly.Plots.resize(timingPlot);
             }
