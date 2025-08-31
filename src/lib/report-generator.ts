@@ -541,10 +541,9 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
     
     const footer_links = [
         `<a id="summary-data-link" href="${summary_csv_datauri}" download="summary_df.csv">📄 Download Summary CSV</a>`,
-        `<a id="epoch-data-link" href="${epoch_csv_datauri}" download="epoch_df.csv">📄 Download Epoch CSV</a>` // epoch __
     ];
     if (hasEpochData) {
-        footer_links.push(`<a href="${epoch_csv_datauri}" download="epoch_df.csv">📄 Download Epoch CSV</a>`);
+        footer_links.push(`<a id="epoch-data-link" href="${epoch_csv_datauri}" download="epoch_df.csv">📄 Download Epoch CSV</a>`);
     }
 
     const nightly_data_note = !hasEpochData ? '<p style="font-style: italic; color: #555;">Note: Epoch data not provided. Nightly detailed views are unavailable.</p>' : '';
@@ -663,7 +662,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             </div>
 
             <h2>Detailed Sleep Metrics</h2>
-            <div id="sleep-timing-plot-container-h" class="responsive-plot></div>
+            <div id="sleep-timing-plot-container-h"></div>
             <div id="detailed-metrics-container"></div>
             <div id="duration-efficiency-regularity-container"></div>
             <div id="sleep-ritual-container"></div>
@@ -727,7 +726,9 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
 
                         return { ...row, startdate_utc: startdate_utc_val, enddate_utc: enddate_utc_val };
                     }).filter(row => row.startdate_utc && row.enddate_utc);
-                    
+                    if (!hasEpochData) {
+                        renderHorizontalSleepTimingPlot(fullSummaryData, false);
+                    }
                     applyFilters();
                 },
                 error: (err) => {
@@ -759,15 +760,13 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
                         // renderWakeEpisodes(wakeEpisodes);
 
                         // Call the plot function if summary is already loaded
-                        if (fullSummaryData.length) {
-                            renderHorizontalSleepTimingPlot(fullSummaryData, wakeEpisodes);
-                        }
+                        renderHorizontalSleepTimingPlot(fullSummaryData, wakeEpisodes);
                     },
                     error: (err) => {
                         console.error("Error parsing epoch CSV:", err);
                     }
                 });
-            } 
+            }
 
             const settingsBtn = document.getElementById('floating-settings-btn');
             const settingsMenu = document.getElementById('settings-menu');
