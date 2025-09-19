@@ -1318,164 +1318,6 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
         }
     }
 
-    function renderMetricsTable(data) {
-        // Get the container element where the table will be rendered
-        const container = document.getElementById('detailed-metrics-container');
-        container.innerHTML = '';
-        // Filter out invalid rows that don't have a valid date
-        const validData = data.filter(d => d.enddate_utc && !isNaN(d.enddate_utc.getTime()));
-        if (validData.length === 0) return;
-        
-        // Create and append the summary table
-        const table = document.createElement('table');
-        table.className = 'summary-stats-table';
-        container.appendChild(table);
-
-        // Add table headers
-        table.innerHTML = \`
-            <thead><tr><th>Metric</th><th>Average (SD)</th><th>Min</th><th>Max</th></tr></thead>
-            <tbody></tbody>\`;
-        const tbody = table.querySelector('tbody');
-
-        // Loop through all the metric fields defined in your config
-        ALL_DATA_FIELDS.forEach(field => {
-            let values = validData.map(row => (row['w_' + field] !== undefined ? row['w_' + field] : row[field])).filter(v => typeof v === 'number' && !isNaN(v));
-            if (values.length === 0) return;  // Skip this metric if no valid values
-
-            // Get a clean display name for the field
-            const displayName = fieldDisplayNameMap[field] || field.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase());
-            
-            // Convert seconds to hours/minutes if field is a duration
-            if (DURATION_FIELDS_IN_SECONDS.includes(field)) {
-                if (displayName.includes('(hours)')) {
-                    values = values.map(v => v / 3600);
-                } else {
-                    values = values.map(v => v / 60);
-                }
-            } else if (EFFICIENCY_FIELDS.includes(field)) {
-                // Convert efficiency from fraction to percentage
-                values = values.map(v => v * 100);
-            }
-
-            // Compute summary stats
-            const mean = arr => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-            const std = (arr, avg) => arr.length > 0 ? Math.sqrt(arr.map(x => Math.pow(x - avg, 2)).reduce((a, b) => a + b) / arr.length) : 0;
-
-            const avg = mean(values);
-            const stdev = std(values, avg);
-            const minVal = Math.min(...values);
-            const maxVal = Math.max(...values);
-
-            // Prepare data for line plot
-            let plotData = validData.map(row => {
-                const timezone = row.w_timezone || row.timezone;
-                const dateStr = formatInTimeZoneJS(row.enddate_utc, timezone, { year: 'numeric', month: '2-digit', day: '2-digit' });
-                if (dateStr === null) return null;
-                return { x: dateStr, y: (row['w_' + field] !== undefined ? row['w_' + field] : row[field]), id: (row.w_id || row.id) };
-            }).filter(Boolean); // Remove null entries
-            
-            // Apply same unit conversions to plot data
-            if (DURATION_FIELDS_IN_SECONDS.includes(field)) {
-                if(displayName.includes('(hours)')) plotData = plotData.map(d => ({ ...d, y: d.y !== null ? d.y / 3600 : null }));
-                else plotData = plotData.map(d => ({ ...d, y: d.y !== null ? d.y / 60 : null }));
-            } else if (EFFICIENCY_FIELDS.includes(field)) {
-                plotData = plotData.map(d => ({ ...d, y: d.y !== null ? d.y * 100 : null }));
-            }
-            
-            // Clean up plot data (remove invalid y-values)
-            const cleanedPlotData = plotData.filter(d => d.y !== null && d.y !== undefined && !isNaN(d.y));
-
-            // Create a new row for this metric
-            const dataRow = document.createElement('tr');
-            dataRow.className = 'data-row';
-            dataRow.innerHTML = \`<td>\${displayName}</td><td>\${avg.toFixed(2)} (\${stdev.toFixed(2)})</td><td>\${minVal.toFixed(2)}</td><td>\${maxVal.toFixed(2)}</td>\`;
-            
-            // If plot data exists, add expandable chart row
-            if (cleanedPlotData.length > 0) {
-                dataRow.classList.add('expandable');
-                const plotRow = document.createElement('tr');
-                plotRow.className = 'plot-row';
-                plotRow.innerHTML = \`<td colspan="4"><div class="details-content responsive-plot"><div id="plot-\${field}"></div></div></td>\`;
-                tbody.appendChild(dataRow);
-                tbody.appendChild(plotRow);
-
-                // Click-to-expand plot row
-                const clickHandler = function(event) {
-                    const targetRow = this;
-                    if (event.target.tagName === 'A') return;
-                    
-                    targetRow.classList.toggle('open');
-                    const nextRow = targetRow.nextElementSibling;
-                    const isNowOpen = nextRow.classList.toggle('open');
-                    
-                    // Only initialize plot once
-                    if (isNowOpen && !nextRow.dataset.plotInitialized) {
-                        nextRow.dataset.plotInitialized = 'true';
-                            setTimeout(() => {
-                            const defaultLineColor = '#75baf5';
-                            const x_coords = cleanedPlotData.map(d => d.x);
-                            const y_coords = cleanedPlotData.map(d => d.y);
-
-                            // Define plot trace
-                            const lineTrace = {
-                                x: x_coords,
-                                y: y_coords,
-                                mode: 'lines',
-                                name: displayName,
-                                line: { width: 2, color: defaultLineColor },
-                                customdata: cleanedPlotData.map(d => d.id),
-                                hovertemplate: hasEpochData ? '%{x}<br>%{y:.2f}<br>Click for details<extra></extra>' : '%{x}<br>%{y:.2f}<extra></extra>'
-                            };
-                            
-                            // Define plot layout
-                            const x_range = [
-                                formatInTimeZoneJS(new Date(cleanedPlotData[0].x), 'UTC', { year: 'numeric', month: '2-digit', day: '2-digit' }),
-                                formatInTimeZoneJS(new Date(cleanedPlotData[cleanedPlotData.length-1].x), 'UTC', { year: 'numeric', month: '2-digit', day: '2-digit' })
-                            ];
-                            
-                            const fig = {
-                                data: [lineTrace],
-                                layout: {
-                                    template: 'simple_white',
-                                    title: displayName, xaxis: { title: "Date (of sleep-end)", range: x_range },
-                                    yaxis: { title: displayName, rangemode: 'tozero' }, autosize: true,
-                                    margin: { l: 80, r: 20, t: 40, b: 40 }, hovermode: 'x', showlegend: false
-                                }
-                            };
-                            const plotElementId = \`plot-\${field}\`;
-                            const plotDiv = document.getElementById(plotElementId);
-                            Plotly.newPlot(plotElementId, fig.data, fig.layout, {responsive: true});
-
-                            // Optional: click point to show detailed view
-                            if (hasEpochData) {
-                                plotDiv.on('plotly_click', function(data) {
-                                    if (data.points.length > 0) {
-                                        const id = data.points[0].customdata;
-                                        if (id && nightlyPlotData[String(id)]) showNight(String(id));
-                                    }
-                                });
-                            }
-                            Plotly.Plots.resize(plotElementId); // Resize for responsiveness
-                        }, 50);
-                    } else if (isNowOpen) {
-                        // If already initialized, just resize on open
-                        setTimeout(() => {
-                            const plotElement = document.getElementById(\`plot-\${field}\`);
-                            if (plotElement) Plotly.Plots.resize(plotElement);
-                        }, 50);
-                    }
-                };
-
-                // Attach click handler to data row
-                dataRow.addEventListener('click', clickHandler);
-            } else {
-
-                // If no plot data, just append the row
-                tbody.appendChild(dataRow);
-            }
-        });
-    }
-
     //Helper funtions
     function formatHoursAndMinutes(decimalHours){
         const hours = Math.floor(decimalHours);
@@ -1588,23 +1430,20 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
             </caption>
 
             <table>
-                <thead><tr><th>Type</th><th>Weekdays</th><th>Weekends</th></tr></thead>
                 <tbody>
-                    <tr><td>Sleep Duration Average</td><td><strong>\${formatHoursAndMinutes(weekdayAvg)}</strong></td><td><strong>\${formatHoursAndMinutes(weekendAvg)}</strong></td></tr>             
+                    <tr><td>Sleep Duration Average</td><td><strong>\${formatHoursAndMinutes(weekdayAvg)}</strong><p>Weekdays</p></td><td><strong>\${formatHoursAndMinutes(weekendAvg)}</strong><p>Weekends</p></td></tr>             
                 </tbody>
             </table>
 
             <table>
-                <thead><tr><th></th><th>Average (min)</th></tr></thead>
                 <tbody>
-                    <tr><td>Sleep Latency</td><td><strong>\${sleepLatencyAvg} min</strong></td></tr>             
+                    <tr><td>Sleep Latency</td><td><strong>\${sleepLatencyAvg} min</strong><p>Average (min)</p></td></tr>             
                 </tbody>
             </table>
 
             <table>
-                <thead><tr><th></th><th>Time In Bed (TIB)</th><th>Total Sleep Time (TST)</th><th>Efficiency</th></tr></thead>
                 <tbody>
-                    <tr><td>Sleep Efficiency</td><td><strong>\${formatHoursAndMinutes(timeInBedAvg)}</strong></td><td><strong>\${formatHoursAndMinutes(totalSleepTimeAvg)}</strong></td><td><strong>\${sleepEfficiencyAvg.toFixed(2)} %</strong></td></tr>             
+                    <tr><td>Sleep Efficiency</td><td><strong>\${formatHoursAndMinutes(timeInBedAvg)}</strong><p>Time In Bed (TIB)</p></td><td><strong>\${formatHoursAndMinutes(totalSleepTimeAvg)}</strong><p>Total Sleep Time (TST)</p></td><td><strong>\${sleepEfficiencyAvg.toFixed(2)} %</strong><p>Efficiency</p></td></tr>             
                 </tbody>
             </table>
             \`;
