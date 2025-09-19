@@ -919,6 +919,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
         SleepVitals(sortedData);
         OSAChart();
         SnoringChart();
+        setupTimingModal();
     }
 
     function renderSummaryStats(data) {
@@ -2029,6 +2030,8 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
         const plots = nightlyPlotData[currentWid];
         if (!meta || !plots) return;
 
+        const modalContent = document.getElementById("nightly-modal-content");
+        modalContent.innerHTML = "";
         document.getElementById("nightly-modal-meta").innerHTML = \`
             <strong>Lab ID:</strong> \${meta.lab_id} &nbsp;&nbsp;
             <strong>Start:</strong> \${meta.startdate} &nbsp;&nbsp;
@@ -2038,6 +2041,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
         plots.forEach((plot, index) => {
             const plotDiv = document.createElement("div");
             plotDiv.id = \`plot-\${id}-\${index}\`;
+            modalContent.appendChild(plotDiv);
             Plotly.newPlot(plotDiv, plot.data, plot.layout, {responsive: true});
         });
 
@@ -2053,18 +2057,39 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
         document.getElementById("prev-night").disabled = idx <= 0;
         document.getElementById("next-night").disabled = idx >= currentWids.length - 1;
     }
-        
-    window.applyFilters = applyFilters;
-    window.addEventListener("resize", () => {
-        const timingPlot = document.getElementById('sleep-timing-plot-container-h').querySelector('.js-plotly-plot');
-        if (timingPlot) {
-                Plotly.Plots.resize(timingPlot);
-        }
 
-        document.querySelectorAll(".details-content .js-plotly-plot").forEach(div => {
-                Plotly.Plots.resize(div);
+    function setupTimingModal() {
+        const modal = document.getElementById('timing-modal');
+        const openBtn = document.getElementById('fullscreen-timing-btn');
+        const closeBtn = document.getElementById('timing-modal-close-btn');
+
+        openBtn.onclick = () => {
+            modal.style.display = 'block';
+            setTimeout(() => {
+                const plotEl = document.getElementById('timing-modal-content').querySelector('.js-plotly-plot');
+                if(plotEl) Plotly.Plots.resize(plotEl);
+            }, 50);
+        };
+        closeBtn.onclick = () => modal.style.display = 'none';
+        window.addEventListener('click', (event) => {
+            if (event.target === modal) modal.style.display = 'none';
         });
-    });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === "Escape" && modal.style.display === "block") modal.style.display = "none";
+        });
+    }
+        
+        window.applyFilters = applyFilters;
+        window.addEventListener("resize", () => {
+            const timingPlot = document.getElementById('sleep-timing-plot-container-h').querySelector('.js-plotly-plot');
+            if (timingPlot) {
+                 Plotly.Plots.resize(timingPlot);
+            }
+
+            document.querySelectorAll(".details-content .js-plotly-plot").forEach(div => {
+                 Plotly.Plots.resize(div);
+            });
+        });
         </script>
     </body>
     </html>
