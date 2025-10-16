@@ -25,7 +25,7 @@ export interface SleepSummaryRecord {
   enddate: number; // UTC timestamp
   total_sleep_time: number; // seconds
   sleep_efficiency: number; // ratio
-  apnea_hypopnea_index: number | null;
+  apnea_hypopnea_index: number;
   snoring: number; // seconds
   night_events?: string | object;
   data?: Record<string, any>; // For nested data object

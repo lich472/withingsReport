@@ -1,13 +1,11 @@
-
-import Papa from 'papaparse'; // a lib to parse CSV file to JSON 
-import { Buffer } from 'buffer';
+import Papa from 'papaparse';
 import type { SleepSummaryResponse, SleepEpochRecord, SleepSummaryRecord, SleepEpochRawData, ProcessedEpoch, ProcessedSummary } from './withings/types';
 
 const ALL_DATA_FIELDS = [
     "total_timeinbed", "total_sleep_time", "asleepduration", 
     "lightsleepduration", "remsleepduration", "deepsleepduration", 
     "sleep_efficiency", "sleep_latency", "wakeup_latency", 
-    "wakeupduration", "waso", 
+    "wakeupduration", "wakeupcount", "waso", 
     "nb_rem_episodes", "apnea_hypopnea_index", "withings_index",
     "durationtosleep", "durationtowakeup", "out_of_bed_count", 
     "hr_average", "hr_min", "hr_max", 
@@ -27,7 +25,7 @@ const DURATION_FIELDS_IN_SECONDS = [
 
 const EFFICIENCY_FIELDS = ["sleep_efficiency"];
 
-const fieldDisplayNameMap: Record<string, string> = {  // "Record<Key, Value>" is a generic type to define object with keys of a specific type and values of a specific type.
+const fieldDisplayNameMap: Record<string, string> = {
     "total_timeinbed": "Total Time in Bed (hours)",
     "total_sleep_time": "Total Sleep Time (hours)",
     "asleepduration": "Asleep Duration (hours)",
@@ -112,22 +110,10 @@ export function processSummaryData(summarySeries: SleepSummaryRecord[], label: s
         const total_sleep_time_hours = typeof row.total_sleep_time === 'number' ? row.total_sleep_time / 3600 : null;
         const sleep_efficiency_percent = typeof row.sleep_efficiency === 'number' ? row.sleep_efficiency * 100 : null;
         const snoring_minutes = typeof row.snoring === 'number' ? row.snoring / 60 : null;
-        const _raw_apnea_hypopnea_index = isNaN(Number(row.apnea_hypopnea_index)) ?  -1 : Number(row.apnea_hypopnea_index);
-        const apnea_hypopnea_index = _raw_apnea_hypopnea_index >= 0 ? _raw_apnea_hypopnea_index : null;
+        const apnea_hypopnea_index = row.apnea_hypopnea_index >= 0 ? row.apnea_hypopnea_index : NaN;
         
         const startdate_utc = !isNaN(Number(startdateNum)) ? new Date(Number(startdateNum) * 1000) : new Date('invalid');
         const enddate_utc = !isNaN(Number(enddateNum)) ? new Date(Number(enddateNum) * 1000) : new Date('invalid');
-        
-        // Parse night_events if it's a string
-        let night_events_parsed = row.night_events;
-        if (typeof night_events_parsed === 'string') {
-            try {
-                night_events_parsed = JSON.parse(night_events_parsed);
-            } catch (e) {
-                console.warn("Could not parse night_events string:", night_events_parsed);
-                night_events_parsed = undefined; // change 'null' to 'undefined'
-            }
-        }
 
         return {
             ...row,
@@ -140,14 +126,13 @@ export function processSummaryData(summarySeries: SleepSummaryRecord[], label: s
             sleep_efficiency_percent,
             snoring_minutes,
             apnea_hypopnea_index,
-            night_events: night_events_parsed,
             sleep_duration_min: total_sleep_time_hours,
         };
     });
 }
 
 export function processEpochData(epochRecords: SleepEpochRecord[], summaryData: ProcessedSummary[]): ProcessedEpoch[] {
-    const summaryMap = new Map(summaryData.map(s => [s.id, { timezone: s.timezone, night_events: s.night_events }]));
+    const summaryMap = new Map(summaryData.map(s => [s.id, { timezone: s.timezone }]));
     
     const allEpochs: ProcessedEpoch[] = [];
     if (!epochRecords) return [];
@@ -182,8 +167,7 @@ export function processEpochData(epochRecords: SleepEpochRecord[], summaryData: 
                     timezone: summaryInfo.timezone,
                     timestamp: timestamp,
                     datetime_utc: new Date(timestamp * 1000),
-                    state: state,
-                    night_events: summaryInfo.night_events,
+                    state: state
                 };
 
                 for (const field of dataFields) {
@@ -205,11 +189,8 @@ export function processEpochData(epochRecords: SleepEpochRecord[], summaryData: 
 
 function plotNight(df: ProcessedEpoch[], timezone: string, applyTimezone: boolean) {
     df.sort((a, b) => a.datetime_utc.getTime() - b.datetime_utc.getTime());
-    const plots: any[]=[];
-    const night_events = df.length > 0 ? df[0].night_events : null;
-    const night_start_date = df.length > 0 ? df[0].datetime_utc : new Date();
-
-    plots.push(plotNightStage(df, timezone, applyTimezone, night_events, night_start_date));
+    const plots: any[] = [];
+    plots.push(plotNightStage(df, timezone, applyTimezone));
 
     const line = (col: keyof ProcessedEpoch, label: string) => {
         const cleanedData = df
@@ -233,7 +214,7 @@ function plotNight(df: ProcessedEpoch[], timezone: string, applyTimezone: boolea
             hovertemplate: '%{y:.2f}<extra></extra>'
         };
 
-        const layout = getNightlyPlotLayout(df, label, label, timezone, night_events, night_start_date, { rangemode: 'tozero' as const }, applyTimezone); // "as const" narrows the value to a literal type
+        const layout = getNightlyPlotLayout(df, label, label, timezone, { rangemode: 'tozero' as const }, applyTimezone);
         layout.showlegend = false;
         
         return { data: [lineTrace], layout: layout };
@@ -284,7 +265,7 @@ function formatInTimeZone(date: Date, timeZone: string, options: Intl.DateTimeFo
     }
 }
 
-function getNightlyPlotLayout(df: ProcessedEpoch[], title: string, yLabel: string, timezone: string, night_events: any, sleepRecordStartDate: Date | null, yAxisSettings: object = {}, applyTimezone: boolean) {
+function getNightlyPlotLayout(df: ProcessedEpoch[], title: string, yLabel: string, timezone: string, yAxisSettings: object = {}, applyTimezone: boolean) {
     if (!df || df.length === 0) {
         return { title: { text: title }, margin: { l: 80, r: 20, t: 40, b: 40 } };
     }
@@ -293,38 +274,8 @@ function getNightlyPlotLayout(df: ProcessedEpoch[], title: string, yLabel: strin
     const start = df[0].datetime_utc;
     const end = df[df.length - 1].datetime_utc;
 
-    let shapes = [];
-
-    const eventMapping: Record<string, {name: string, color: string, dash: string}> = {
-        '1': { name: 'Got in Bed', color: '#1f77b4', dash: 'dash' },
-        '2': { name: 'Fell Asleep', color: '#2ca02c', dash: 'dash' },
-        '3': { name: 'Woke Up', color: '#ff7f0e', dash: 'dash' },
-        '4': { name: 'Got out of Bed', color: '#d62728', dash: 'dash' },
-    };
-
-    if (night_events && typeof night_events === 'object' && sleepRecordStartDate) {
-        shapes = Object.entries(night_events).flatMap(([eventCode, timestamps]) => {
-            if (!eventMapping[eventCode] || !Array.isArray(timestamps)) return [];
-            return timestamps.map(tsOffset => {
-                const event_date = new Date(sleepRecordStartDate.getTime() + (tsOffset * 1000));
-                return {
-                    type: 'line',
-                    x0: formatInTimeZone(event_date, timezone, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }, applyTimezone),
-                    y0: 0,
-                    x1: formatInTimeZone(event_date, timezone, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }, applyTimezone),
-                    y1: 1,
-                    yref: 'paper',
-                    line: {
-                        color: eventMapping[eventCode].color,
-                        width: 1,
-                        dash: eventMapping[eventCode].dash
-                    },
-                    name: eventMapping[eventCode].name,
-                };
-            });
-        });
-    }
-
+    const shapes = [];
+    
     const tzForCalc = applyTimezone ? timezone : 'UTC';
     
     const startInTz = new Date(start.toLocaleString('en-US', {timeZone: tzForCalc}));
@@ -368,79 +319,37 @@ function getNightlyPlotLayout(df: ProcessedEpoch[], title: string, yLabel: strin
 }
 
 
-function plotNightStage(df: ProcessedEpoch[], timezone: string, applyTimezone: boolean, night_events: any, sleepRecordStartDate: Date | null) {
+function plotNightStage(df: ProcessedEpoch[], timezone: string, applyTimezone: boolean) {
     const stageMap: Record<number, { name: string, color: string }> = {
-        0: { name: 'Awake', color: '#808080' },
-        1: { name: 'Light', color: '#a6cee3' },
-        2: { name: 'Deep', color: '#1f78b4' },
-        3: { name: 'REM', color: '#9467bd' },
+        0: { name: 'Awake', color: '#ff7f0e' },
+        1: { name: 'Light', color: '#1f77b4' },
+        2: { name: 'Deep', color: '#2ca02c' },
+        3: { name: 'REM', color: '#d62728' },
     };
 
     const data = df.map(row => ({
         x: formatInTimeZone(row.datetime_utc, timezone, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }, applyTimezone),
         y: row.state,
         text: stageMap[row.state]?.name || 'Unknown',
-        color: stageMap[row.state]?.color || '#808080',
     })).sort((a, b) => new Date(a.x).getTime() - new Date(b.x).getTime());
     
-    const traces = [];
-    let currentSegment = { x: [], y: [], text: [], color: null };
-
-    for (let i = 0; i < data.length; i++) {
-        const point = data[i];
-        if (currentSegment.color !== point.color) {
-            if (currentSegment.x.length > 0) {
-                // Before starting a new segment, add the start of the new point to close the gap for hv shape
-                currentSegment.x.push(point.x);
-                currentSegment.y.push(currentSegment.y[currentSegment.y.length - 1]);
-                traces.push({
-                    x: currentSegment.x,
-                    y: currentSegment.y,
-                    text: currentSegment.text,
-                    mode: 'lines',
-                    line: { color: currentSegment.color, shape: 'hv', width: 4 },
-                    hoverinfo: 'x+text',
-                    name: stageMap[currentSegment.y[0]]?.name || 'Unknown',
-                    hovertemplate: `<b>%{text}</b><br>%{x|%H:%M}<extra></extra>`
-                });
-            }
-            currentSegment = { x: [], y: [], text: [], color: point.color }; // issue: the value of "color" is only null
-        }
-        currentSegment.x.push(point.x); // issue: "never[]" is empty array forever
-        currentSegment.y.push(point.y);
-        currentSegment.text.push(point.text);
-    }
-    // Add the last segment
-    if (currentSegment.x.length > 0) {
-        traces.push({
-            x: currentSegment.x,
-            y: currentSegment.y,
-            text: currentSegment.text,
-            mode: 'lines',
-            line: { color: currentSegment.color, shape: 'hv', width: 4 },
-            hoverinfo: 'x+text',
-            name: stageMap[currentSegment.y[0]]?.name || 'Unknown',
-            hovertemplate: `<b>%{text}</b><br>%{x|%H:%M}<extra></extra>`
-        });
-    }
-
-    const layout = getNightlyPlotLayout(df, 'Sleep Stages', 'Sleep Stage', timezone, night_events, sleepRecordStartDate, {
+    const trace = {
+        x: data.map(d => d.x),
+        y: data.map(d => d.y),
+        text: data.map(d => d.text),
+        mode: "lines",
+        name: 'Sleep Stage',
+        line: { shape: 'hv' as const, width: 4 },
+        hovertemplate: '<b>%{text}</b><br>%{x|%H:%M}<extra></extra>',
+    };
+    
+    const layout = getNightlyPlotLayout(df, 'Sleep Stages', 'Sleep Stage', timezone, {
         tickmode: 'array' as const,
         tickvals: [0, 1, 2, 3],
         ticktext: ['Awake', 'Light', 'Deep', 'REM'],
         autorange: 'reversed'
     }, applyTimezone);
-
-    layout.showlegend = true;
-    layout.legend = {
-        orientation: 'h',
-        yanchor: 'bottom',
-        y: -0.3,
-        xanchor: 'right',
-        x: 1
-    };
-    
-    return { data: traces, layout: layout };
+    return { data: [trace], layout: layout };
 }
 
 export async function generateReport(label: string, summaryData: ProcessedSummary[], epochData?: ProcessedEpoch[], applyTimezone: boolean = true): Promise<string> {
@@ -452,15 +361,7 @@ export async function generateReport(label: string, summaryData: ProcessedSummar
 
     const hasEpochData = !!epochData && epochData.length > 0;
     
-    const summaryDataForCsv = summaryData.map(row => {
-        const newRow = {...row};
-        if(typeof newRow.night_events === 'object' && newRow.night_events !== null) {
-            newRow.night_events = JSON.stringify(newRow.night_events);
-        }
-        return newRow;
-    });
-    const summary_csv_datauri = dfToDataUri(summaryDataForCsv, Object.keys(summaryData[0] || {}));
-
+    const summary_csv_datauri = dfToDataUri(summaryData, Object.keys(summaryData[0] || {}));
     const epoch_csv_columns = ['id', 'timestamp', 'state', 'hr', 'rr', 'snoring', 'sdnn_1', 'rmssd', 'mvt_score', 'chest_movement_rate', 'withings_index', 'breathing_sounds'];
     const epoch_csv_datauri = hasEpochData ? dfToDataUri(epochData, epoch_csv_columns) : '';
 
